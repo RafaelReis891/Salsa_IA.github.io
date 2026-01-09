@@ -135,13 +135,22 @@
 
 
 <div class="container">
-    <div id="aiButton" onclick="startRec()">IA</div>
+    <div id="aiButton" onclick="startRec(); toggleFull();">IA</div>
 
     <p id="falado"></p>
     <p id="resultado"></p>
 </div>
 
 <script>
+
+    function toggleFull() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+    } else {
+        document.exitFullscreen();
+    }
+}
+
 
 // PERGUNTAS E RESPOSTAS TRILÍNGUE
 const qa = [
@@ -564,4 +573,5 @@ function startRec() {
 
 </body>
 </html>
+
 
