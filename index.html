@@ -2,49 +2,153 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>AR Kart Teste</title>
+<title>AR Sandbox</title>
 
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-<script src="https://unpkg.com/@ar-js-org/ar.js@3.4.5/aframe/build/aframe-ar.js"></script>
 
 <style>
-body {
+
+html, body {
     margin:0;
+    overflow:hidden;
+    font-family:Arial;
 }
-.info{
+
+#ui{
     position:absolute;
     top:10px;
     left:10px;
-    color:white;
-    background:rgba(0,0,0,0.7);
-    padding:10px;
-    z-index:999;
+    z-index:9999;
+    display:flex;
+    flex-direction:column;
+    gap:5px;
 }
+
+button{
+    padding:12px;
+    font-size:16px;
+}
+
+#log{
+    background:rgba(0,0,0,0.7);
+    color:#00ff00;
+    padding:10px;
+    width:300px;
+    height:180px;
+    overflow:auto;
+}
+
 </style>
 </head>
-
 <body>
 
-<div class="info">
-    Kart Teste v3
+<div id="ui">
+
+    <button onclick="addSphere()">Criar Esfera</button>
+
+    <button onclick="removeSphere()">Remover Esfera</button>
+
+    <button onclick="toggleSphere()">Mostrar/Ocultar</button>
+
+    <button onclick="moveNear()">Mover para Frente</button>
+
+    <button onclick="moveFar()">Mover para Longe</button>
+
+    <div id="log"></div>
+
 </div>
 
-<a-scene
-    vr-mode-ui="enabled: false"
-    embedded
-    arjs="sourceType: webcam; debugUIEnabled: false;">
+<a-scene>
 
-    <a-camera gps-new-camera></a-camera>
-
-    <a-sphere
-        color="#ff0000"
-        radius="5"
-        gps-new-entity-place="
-            latitude: -22.4420306;
-            longitude: -46.9526000;">
-    </a-sphere>
+    <a-camera position="0 1.6 0"></a-camera>
 
 </a-scene>
+
+<script>
+
+const scene = document.querySelector("a-scene");
+const logDiv = document.getElementById("log");
+
+let sphere = null;
+
+function log(text)
+{
+    logDiv.innerHTML += text + "<br>";
+    logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+function addSphere()
+{
+    if(sphere)
+    {
+        log("Esfera já existe");
+        return;
+    }
+
+    sphere = document.createElement("a-sphere");
+
+    sphere.setAttribute("radius","0.3");
+    sphere.setAttribute("color","#ff0000");
+
+    sphere.setAttribute("position","0 1.5 -3");
+
+    scene.appendChild(sphere);
+
+    log("Esfera criada");
+}
+
+function removeSphere()
+{
+    if(!sphere) return;
+
+    sphere.remove();
+
+    sphere = null;
+
+    log("Esfera removida");
+}
+
+function toggleSphere()
+{
+    if(!sphere) return;
+
+    const visible = sphere.getAttribute("visible");
+
+    sphere.setAttribute("visible", !visible);
+
+    log("Visibilidade: " + !visible);
+}
+
+function moveNear()
+{
+    if(!sphere) return;
+
+    sphere.setAttribute(
+        "position",
+        "0 1.5 -2"
+    );
+
+    log("Movida para 2m");
+}
+
+function moveFar()
+{
+    if(!sphere) return;
+
+    sphere.setAttribute(
+        "position",
+        "0 1.5 -10"
+    );
+
+    log("Movida para 10m");
+}
+
+window.onload = () =>
+{
+    log("A-Frame carregado");
+};
+
+</script>
 
 </body>
 </html>
