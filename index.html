@@ -8,6 +8,17 @@
 body {
     margin:0;
     overflow:hidden;
+    background: black;
+}
+
+#video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
 }
 
 #ui {
@@ -21,6 +32,21 @@ body {
     font-family:Arial;
     font-size:14px;
 }
+
+#permission-btn {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 100;
+    padding: 20px 40px;
+    font-size: 18px;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    display: none;
+}
 </style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -33,7 +59,9 @@ GPS: carregando...<br>
 Distância: --
 </div>
 
-<video id="video" autoplay playsinline style="display:none;"></video>
+<button id="permission-btn">Ativar Sensores</button>
+
+<video id="video" autoplay playsinline muted></video>
 
 <script>
 
@@ -52,58 +80,105 @@ const camera = new THREE.PerspectiveCamera(
     75,
     window.innerWidth/window.innerHeight,
     0.1,
-    1000
+    10000
 );
 
-const renderer = new THREE.WebGLRenderer({alpha:true});
+const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
 document.body.appendChild(renderer.domElement);
 
-// esfera (kart)
-const geometry = new THREE.SphereGeometry(0.5, 16, 16);
-const material = new THREE.MeshBasicMaterial({color:0x00ff00});
+// Posicionar canvas sobre o vídeo
+renderer.domElement.style.position = 'fixed';
+renderer.domElement.style.top = '0';
+renderer.domElement.style.left = '0';
+renderer.domElement.style.zIndex = '1';
+
+// esfera (kart) - aumentei o tamanho para ficar mais visível
+const geometry = new THREE.SphereGeometry(2, 32, 32);
+const material = new THREE.MeshBasicMaterial({
+    color:0xff0000,
+    transparent: true,
+    opacity: 0.8
+});
 const sphere = new THREE.Mesh(geometry, material);
 scene.add(sphere);
 
-// luz (opcional)
-const light = new THREE.AmbientLight(0xffffff);
-scene.add(light);
+// Adicionar um anel ao redor da esfera para melhor visualização
+const ringGeometry = new THREE.RingGeometry(2.5, 3, 32);
+const ringMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffff00,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.6
+});
+const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+sphere.add(ring);
 
 // ======================
-// CAMERA REAL
+// CAMERA REAL - VÍDEO COMO FUNDO
 // ======================
 navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } })
 .then(stream => {
-    document.getElementById("video").srcObject = stream;
+    const video = document.getElementById("video");
+    video.srcObject = stream;
+    video.play();
+})
+.catch(err => {
+    console.error("Erro ao acessar câmera:", err);
+    document.getElementById("ui").innerHTML += "<br>ERRO CÂMERA: " + err.message;
 });
 
-// fundo camera
-const video = document.getElementById("video");
-
 // ======================
-// GPS
+// GPS E VARIÁVEIS GLOBAIS
 // ======================
 let userLat = 0;
 let userLon = 0;
 let distance = 0;
 let bearing = 0;
+let deviceHeading = 0; // Direção que o celular está apontando (0-360)
 
+// ======================
+// SOLICITAR PERMISSÃO DE ORIENTAÇÃO (iOS 13+)
+// ======================
+function requestOrientationPermission() {
+    if (typeof DeviceOrientationEvent !== 'undefined' && 
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+            .then(permissionState => {
+                if (permissionState === 'granted') {
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                    document.getElementById('permission-btn').style.display = 'none';
+                }
+            })
+            .catch(console.error);
+    } else {
+        // Android e outros navegadores
+        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.addEventListener('deviceorientation', handleOrientation, true);
+    }
+}
+
+// Detectar se precisa de permissão (iOS)
+if (typeof DeviceOrientationEvent !== 'undefined' && 
+    typeof DeviceOrientationEvent.requestPermission === 'function') {
+    document.getElementById('permission-btn').style.display = 'block';
+    document.getElementById('permission-btn').addEventListener('click', requestOrientationPermission);
+} else {
+    requestOrientationPermission();
+}
+
+// ======================
+// GPS
+// ======================
 navigator.geolocation.watchPosition(pos => {
 
     userLat = pos.coords.latitude;
     userLon = pos.coords.longitude;
 
-    distance = getDistance(
-        userLat, userLon,
-        targetLat, targetLon
-    );
+    distance = getDistance(userLat, userLon, targetLat, targetLon);
+    bearing = getBearing(userLat, userLon, targetLat, targetLon);
 
-    bearing = getBearing(
-        userLat, userLon,
-        targetLat, targetLon
-    );
-
-    // Atualizar posição da esfera baseada em bearing e distância
     updateSpherePosition();
 
     document.getElementById("ui").innerHTML =
@@ -111,28 +186,32 @@ navigator.geolocation.watchPosition(pos => {
         "Lat: " + userLat.toFixed(6) + "<br>" +
         "Lon: " + userLon.toFixed(6) + "<br>" +
         "Distância: " + distance.toFixed(1) + " m<br>" +
-        "Bearing: " + bearing.toFixed(1) + "°";
+        "Bearing: " + bearing.toFixed(1) + "°<br>" +
+        "Heading: " + deviceHeading.toFixed(1) + "°";
 
 }, err => {
-    document.getElementById("ui").innerHTML =
-        "ERRO GPS: " + err.message;
+    document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message;
+}, {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 5000
 });
 
 // ======================
 // DEVICE ORIENTATION (BÚSSOLA)
 // ======================
-let deviceAlpha = 0; // Rotação em Z (bússola)
-let deviceBeta = 0;  // Rotação em X (frente/trás)
-let deviceGamma = 0; // Rotação em Y (esquerda/direita)
-
-window.addEventListener('deviceorientation', (event) => {
-    deviceAlpha = event.alpha || 0; // 0-360 graus
-    deviceBeta = event.beta || 0;   // -180 a 180 graus
-    deviceGamma = event.gamma || 0; // -90 a 90 graus
+function handleOrientation(event) {
+    // webkitCompassHeading é mais preciso no iOS
+    if (event.webkitCompassHeading) {
+        deviceHeading = event.webkitCompassHeading;
+    } else if (event.alpha) {
+        // Android usa alpha (0-360, mas direção oposta)
+        deviceHeading = 360 - event.alpha;
+    }
     
-    // Rotacionar câmera baseado na orientação do dispositivo
-    updateCameraRotation();
-}, true);
+    // Atualizar posição da esfera baseado no heading
+    updateSpherePosition();
+}
 
 // ======================
 // CALCULAR BEARING (AZIMUTE)
@@ -147,7 +226,7 @@ function getBearing(lat1, lon1, lat2, lon2) {
               Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
     
     let bearing = Math.atan2(y, x) * 180 / Math.PI;
-    bearing = (bearing + 360) % 360; // Normalizar para 0-360
+    bearing = (bearing + 360) % 360;
     
     return bearing;
 }
@@ -173,37 +252,30 @@ function getDistance(lat1, lon1, lat2, lon2) {
 // ATUALIZAR POSIÇÃO DA ESFERA
 // ======================
 function updateSpherePosition() {
-    // Converter bearing para radianos
-    const bearingRad = bearing * Math.PI / 180;
+    if (distance === 0) return;
     
-    // Escalar distância para o mundo 3D (ajuste conforme necessário)
-    const scale = 0.1; // Ajuste este valor para controlar o tamanho do mundo AR
-    const scaledDistance = Math.min(distance * scale, 50); // Limitar distância máxima
+    // Calcular diferença entre bearing do alvo e heading do dispositivo
+    let angleDiff = bearing - deviceHeading;
     
-    // Calcular posição X e Z baseada em bearing
-    // Bearing 0° = Norte (Z negativo), 90° = Leste (X positivo)
-    sphere.position.x = scaledDistance * Math.sin(bearingRad);
-    sphere.position.z = -scaledDistance * Math.cos(bearingRad);
-    sphere.position.y = 0; // Altura fixa (ajuste se necessário)
-}
-
-// ======================
-// ATUALIZAR ROTAÇÃO DA CÂMERA
-// ======================
-function updateCameraRotation() {
-    // Converter graus para radianos
-    const alphaRad = deviceAlpha * Math.PI / 180;
-    const betaRad = deviceBeta * Math.PI / 180;
-    const gammaRad = deviceGamma * Math.PI / 180;
+    // Normalizar para -180 a 180
+    while (angleDiff > 180) angleDiff -= 360;
+    while (angleDiff < -180) angleDiff += 360;
     
-    // Aplicar rotação à câmera
-    // Alpha: rotação em Y (bússola)
-    // Beta: rotação em X (inclinação frente/trás)
-    // Gamma: rotação em Z (inclinação esquerda/direita)
-    camera.rotation.order = 'YXZ';
-    camera.rotation.y = -alphaRad;
-    camera.rotation.x = betaRad - Math.PI / 2; // Ajuste para orientação paisagem
-    camera.rotation.z = -gammaRad;
+    // Converter para radianos
+    const angleRad = angleDiff * Math.PI / 180;
+    
+    // Distância no mundo 3D (escala ajustável)
+    // Ajuste este valor para controlar quão longe a esfera aparece
+    const scale = 0.05; // Ajuste conforme necessário
+    const zDistance = -Math.min(distance * scale, 100); // Negativo porque câmera olha para -Z
+    
+    // Posicionar esfera baseado no ângulo relativo
+    sphere.position.x = Math.sin(angleRad) * Math.abs(zDistance);
+    sphere.position.z = zDistance;
+    sphere.position.y = 0; // Altura do nível do olho
+    
+    // Fazer a esfera sempre olhar para a câmera
+    sphere.lookAt(camera.position);
 }
 
 // ======================
