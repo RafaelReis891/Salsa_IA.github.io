@@ -2,15 +2,18 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>AR KART CORE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR KART CORE - Mundo Fixo</title>
 
 <style>
 body {
-    margin:0;
-    overflow:hidden;
+    margin: 0;
+    overflow: hidden;
     background: black;
+    font-family: Arial, sans-serif;
 }
 
+/* Vídeo da câmera como fundo */
 #video {
     position: fixed;
     top: 0;
@@ -21,17 +24,27 @@ body {
     z-index: 0;
 }
 
+/* Canvas 3D transparente sobre o vídeo */
+#canvas-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
 #ui {
-    position:absolute;
-    top:0;
-    left:0;
-    z-index:10;
-    background:rgba(0,0,0,0.7);
-    color:white;
-    padding:10px;
-    font-family:Arial;
-    font-size:12px;
-    max-width: 300px;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.7);
+    color: #00ff00;
+    padding: 10px;
+    font-size: 13px;
+    border-radius: 5px;
+    max-width: 250px;
 }
 
 #permission-btn {
@@ -40,13 +53,15 @@ body {
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 100;
-    padding: 20px 40px;
+    padding: 20px 30px;
     font-size: 18px;
-    background: #4CAF50;
+    background: #007bff;
     color: white;
     border: none;
     border-radius: 10px;
     display: none;
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
 }
 </style>
 
@@ -55,178 +70,193 @@ body {
 
 <body>
 
-<div id="ui">
-GPS: carregando...<br>
-Distância: --
-</div>
-
-<button id="permission-btn">Ativar Sensores</button>
-
+<div id="ui">Inicializando AR...</div>
+<button id="permission-btn">📱 Ativar Sensores de Movimento</button>
 <video id="video" autoplay playsinline muted></video>
+<div id="canvas-container"></div>
 
 <script>
 
 // ======================
-// CONFIG KART
+// 1. CONFIGURAÇÕES
 // ======================
 const targetLat = -22.4420306;
 const targetLon = -46.9526000;
 
+let userLat = 0;
+let userLon = 0;
+let distance = 0;
+let bearing = 0;
+
 // ======================
-// THREE SETUP
+// 2. THREE.JS SETUP
 // ======================
 const scene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(
     75,
-    window.innerWidth/window.innerHeight,
+    window.innerWidth / window.innerHeight,
     0.1,
     10000
 );
+// Ordem de rotação YXZ é essencial para bússola + inclinação funcionar sem travar
+camera.rotation.order = 'YXZ';
 
-// Garantir que a câmera está olhando para -Z
-camera.position.set(0, 0, 0);
-camera.lookAt(0, 0, -1);
-
-const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x000000, 0);
-document.body.appendChild(renderer.domElement);
-
-// Posicionar canvas sobre o vídeo
-renderer.domElement.style.position = 'fixed';
-renderer.domElement.style.top = '0';
-renderer.domElement.style.left = '0';
-renderer.domElement.style.zIndex = '1';
+renderer.setClearColor(0x000000, 0); // Fundo transparente
+document.getElementById('canvas-container').appendChild(renderer.domElement);
 
 // ======================
-// ESFERA PRINCIPAL (KART)
+// 3. CRIAR O OBJETO NO MUNDO (FIXO)
 // ======================
-const geometry = new THREE.SphereGeometry(5, 32, 32);
-const material = new THREE.MeshBasicMaterial({
-    color:0xff0000,
-    transparent: true,
-    opacity: 0.9
+// Grupo para segurar a esfera e o anel
+const targetGroup = new THREE.Group();
+scene.add(targetGroup);
+
+// Esfera principal
+const geometry = new THREE.SphereGeometry(1, 32, 32);
+const material = new THREE.MeshBasicMaterial({ 
+    color: 0xff0000, 
+    transparent: true, 
+    opacity: 0.9 
 });
 const sphere = new THREE.Mesh(geometry, material);
-scene.add(sphere);
+targetGroup.add(sphere);
 
-// ======================
-// OBJETO DE TESTE - SEMPRE VISÍVEL
-// ======================
-// Esfera azul fixa na frente da câmera para teste
-const testGeometry = new THREE.SphereGeometry(3, 32, 32);
-const testMaterial = new THREE.MeshBasicMaterial({
-    color: 0x0000ff,
-    transparent: true,
-    opacity: 0.7
+// Anel ao redor para facilitar a visualização à distância
+const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
+const ringMat = new THREE.MeshBasicMaterial({ 
+    color: 0xffff00, 
+    side: THREE.DoubleSide, 
+    transparent: true, 
+    opacity: 0.8 
 });
-const testSphere = new THREE.Mesh(testGeometry, testMaterial);
-testSphere.position.set(0, 0, -20); // 20 unidades na frente
-scene.add(testSphere);
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = Math.PI / 2; // Deitar o anel
+targetGroup.add(ring);
 
-// Adicionar eixo para visualização
-const axesHelper = new THREE.AxesHelper(10);
-scene.add(axesHelper);
+// Luz (para caso mude o material no futuro)
+scene.add(new THREE.AmbientLight(0xffffff, 1));
 
 // ======================
-// CAMERA REAL - VÍDEO COMO FUNDO
+// 4. CÂMERA DO CELULAR
 // ======================
-navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } })
+navigator.mediaDevices.getUserMedia({ 
+    video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } 
+})
 .then(stream => {
     const video = document.getElementById("video");
     video.srcObject = stream;
     video.play();
 })
 .catch(err => {
-    console.error("Erro ao acessar câmera:", err);
-    document.getElementById("ui").innerHTML += "<br>ERRO CÂMERA: " + err.message;
+    document.getElementById("ui").innerHTML = "ERRO CÂMERA: " + err.message;
 });
 
 // ======================
-// GPS E VARIÁVEIS GLOBAIS
+// 5. GPS E POSICIONAMENTO NO MUNDO
 // ======================
-let userLat = 0;
-let userLon = 0;
-let distance = 0;
-let bearing = 0;
-let deviceHeading = 0;
+function updateWorldPosition() {
+    if (userLat === 0) return;
+
+    distance = getDistance(userLat, userLon, targetLat, targetLon);
+    bearing = getBearing(userLat, userLon, targetLat, targetLon);
+
+    // Converter bearing (0-360) para radianos
+    // No Three.js: Norte = -Z, Leste = +X
+    const bearingRad = bearing * (Math.PI / 180);
+
+    // Posição FIXA no mundo 3D baseada no GPS
+    // Multiplicamos por 1 para usar metros reais. 
+    // Se o alvo estiver muito longe (ex: 1000m), a esfera ficará pequena.
+    // Dica: Se quiser que ela seja sempre visível, descomente a linha de escala abaixo:
+    // const visualScale = Math.max(1, distance * 0.05); 
+    
+    targetGroup.position.x = distance * Math.sin(bearingRad);
+    targetGroup.position.z = -distance * Math.cos(bearingRad);
+    targetGroup.position.y = 1.5; // 1.5 metro de altura (altura dos olhos)
+
+    // Opcional: Fazer o objeto sempre olhar para a câmera (billboard)
+    // targetGroup.lookAt(camera.position);
+
+    updateUI();
+}
+
+navigator.geolocation.watchPosition(pos => {
+    userLat = pos.coords.latitude;
+    userLon = pos.coords.longitude;
+    updateWorldPosition();
+}, err => {
+    document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message;
+}, {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 10000
+});
 
 // ======================
-// SOLICITAR PERMISSÃO DE ORIENTAÇÃO (iOS 13+)
+// 6. ORIENTAÇÃO DO DISPOSITIVO (GIRAR A CÂMERA)
 // ======================
-function requestOrientationPermission() {
+function handleOrientation(event) {
+    let heading = 0;
+
+    // iOS fornece a bússola absoluta diretamente
+    if (event.webkitCompassHeading) {
+        heading = event.webkitCompassHeading;
+    } 
+    // Android precisa do evento 'absolute' para o Norte verdadeiro
+    else if (event.alpha !== null) {
+        heading = 360 - event.alpha;
+    }
+
+    // Converter heading para radianos e aplicar na câmera
+    // Quando heading = 0 (Norte), câmera olha para -Z (rotation.y = 0)
+    // Quando heading = 90 (Leste), câmera olha para +X (rotation.y = -PI/2)
+    const headingRad = heading * (Math.PI / 180);
+    camera.rotation.y = -headingRad;
+
+    // Inclinação para cima/baixo (Beta) e esquerda/direita (Gamma)
+    // Ajustamos os offsets para funcionar bem no modo retrato
+    const beta = event.beta || 0;   // -180 a 180
+    const gamma = event.gamma || 0; // -90 a 90
+
+    camera.rotation.x = beta * (Math.PI / 180);
+    camera.rotation.z = -gamma * (Math.PI / 180);
+}
+
+function requestPermission() {
     if (typeof DeviceOrientationEvent !== 'undefined' && 
         typeof DeviceOrientationEvent.requestPermission === 'function') {
+        
         DeviceOrientationEvent.requestPermission()
             .then(permissionState => {
                 if (permissionState === 'granted') {
+                    // iOS precisa do evento padrão
                     window.addEventListener('deviceorientation', handleOrientation, true);
                     document.getElementById('permission-btn').style.display = 'none';
                 }
             })
             .catch(console.error);
     } else {
+        // Android e outros: tenta o absoluto primeiro (Norte verdadeiro), depois o normal
         window.addEventListener('deviceorientationabsolute', handleOrientation, true);
         window.addEventListener('deviceorientation', handleOrientation, true);
+        document.getElementById('permission-btn').style.display = 'none';
     }
 }
 
+// Mostrar botão apenas se for iOS 13+ que exige permissão
 if (typeof DeviceOrientationEvent !== 'undefined' && 
     typeof DeviceOrientationEvent.requestPermission === 'function') {
     document.getElementById('permission-btn').style.display = 'block';
-    document.getElementById('permission-btn').addEventListener('click', requestOrientationPermission);
+    document.getElementById('permission-btn').addEventListener('click', requestPermission);
 } else {
-    requestOrientationPermission();
+    requestPermission();
 }
 
 // ======================
-// GPS
-// ======================
-navigator.geolocation.watchPosition(pos => {
-
-    userLat = pos.coords.latitude;
-    userLon = pos.coords.longitude;
-
-    distance = getDistance(userLat, userLon, targetLat, targetLon);
-    bearing = getBearing(userLat, userLon, targetLat, targetLon);
-
-    updateSpherePosition();
-
-    document.getElementById("ui").innerHTML =
-        "GPS OK V5<br>" +
-        "Lat: " + userLat.toFixed(6) + "<br>" +
-        "Lon: " + userLon.toFixed(6) + "<br>" +
-        "Distância: " + distance.toFixed(1) + " m<br>" +
-        "Bearing: " + bearing.toFixed(1) + "°<br>" +
-        "Heading: " + deviceHeading.toFixed(1) + "°<br>" +
-        "Esfera X: " + sphere.position.x.toFixed(2) + "<br>" +
-        "Esfera Y: " + sphere.position.y.toFixed(2) + "<br>" +
-        "Esfera Z: " + sphere.position.z.toFixed(2);
-
-}, err => {
-    document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message;
-}, {
-    enableHighAccuracy: true,
-    maximumAge: 0,
-    timeout: 5000
-});
-
-// ======================
-// DEVICE ORIENTATION (BÚSSOLA)
-// ======================
-function handleOrientation(event) {
-    if (event.webkitCompassHeading) {
-        deviceHeading = event.webkitCompassHeading;
-    } else if (event.alpha) {
-        deviceHeading = 360 - event.alpha;
-    }
-    
-    updateSpherePosition();
-}
-
-// ======================
-// CALCULAR BEARING (AZIMUTE)
+// 7. FUNÇÕES MATEMÁTICAS
 // ======================
 function getBearing(lat1, lon1, lat2, lon2) {
     const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -237,70 +267,44 @@ function getBearing(lat1, lon1, lat2, lon2) {
     const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
               Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
     
-    let bearing = Math.atan2(y, x) * 180 / Math.PI;
-    bearing = (bearing + 360) % 360;
-    
-    return bearing;
+    let brng = Math.atan2(y, x) * 180 / Math.PI;
+    return (brng + 360) % 360;
 }
 
-// ======================
-// DISTÂNCIA REAL
-// ======================
 function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371000;
-    const dLat = (lat2-lat1) * Math.PI/180;
-    const dLon = (lon2-lon1) * Math.PI/180;
+    const R = 6371000; // Raio da Terra em metros
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
     
-    const a =
-        Math.sin(dLat/2)**2 +
-        Math.cos(lat1*Math.PI/180) *
-        Math.cos(lat2*Math.PI/180) *
-        Math.sin(dLon/2)**2;
+    const a = Math.sin(dLat/2)**2 +
+              Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2;
     
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function updateUI() {
+    document.getElementById("ui").innerHTML = 
+        `📍 GPS Ativo<br>` +
+        `🎯 Distância: ${distance.toFixed(1)} m<br>` +
+        `🧭 Direção Alvo: ${bearing.toFixed(0)}°<br>` +
+        `📐 Pos X: ${targetGroup.position.x.toFixed(1)}<br>` +
+        `📐 Pos Z: ${targetGroup.position.z.toFixed(1)}`;
 }
 
 // ======================
-// ATUALIZAR POSIÇÃO DA ESFERA
-// ======================
-function updateSpherePosition() {
-    if (distance === 0) return;
-    
-    // Calcular diferença entre bearing do alvo e heading do dispositivo
-    let angleDiff = bearing - deviceHeading;
-    
-    // Normalizar para -180 a 180
-    while (angleDiff > 180) angleDiff -= 360;
-    while (angleDiff < -180) angleDiff += 360;
-    
-    // Converter para radianos
-    const angleRad = angleDiff * Math.PI / 180;
-    
-    // Distância no mundo 3D - usar distância real em metros
-    // Ajuste o divisor para controlar a escala
-    const zDistance = -Math.min(distance / 10, 100);
-    
-    // Posicionar esfera baseado no ângulo relativo
-    sphere.position.x = Math.sin(angleRad) * Math.abs(zDistance);
-    sphere.position.y = 0;
-    sphere.position.z = zDistance;
-    
-    console.log("Esfera posicionada em:", sphere.position);
-}
-
-// ======================
-// LOOP
+// 8. LOOP DE RENDERIZAÇÃO
 // ======================
 function animate() {
     requestAnimationFrame(animate);
+    
+    // Animação suave do anel para saber que está vivo
+    ring.rotation.z += 0.02;
+    
     renderer.render(scene, camera);
 }
-
 animate();
 
-// ======================
-// RESIZE
-// ======================
+// Redimensionamento da tela
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -308,6 +312,5 @@ window.addEventListener('resize', () => {
 });
 
 </script>
-
 </body>
 </html>
