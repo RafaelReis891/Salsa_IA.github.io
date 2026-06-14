@@ -30,7 +30,8 @@ body {
     color:white;
     padding:10px;
     font-family:Arial;
-    font-size:14px;
+    font-size:12px;
+    max-width: 300px;
 }
 
 #permission-btn {
@@ -83,6 +84,10 @@ const camera = new THREE.PerspectiveCamera(
     10000
 );
 
+// Garantir que a câmera está olhando para -Z
+camera.position.set(0, 0, 0);
+camera.lookAt(0, 0, -1);
+
 const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
@@ -94,26 +99,35 @@ renderer.domElement.style.top = '0';
 renderer.domElement.style.left = '0';
 renderer.domElement.style.zIndex = '1';
 
-// esfera (kart) - aumentei o tamanho para ficar mais visível
-const geometry = new THREE.SphereGeometry(2, 32, 32);
+// ======================
+// ESFERA PRINCIPAL (KART)
+// ======================
+const geometry = new THREE.SphereGeometry(5, 32, 32);
 const material = new THREE.MeshBasicMaterial({
     color:0xff0000,
     transparent: true,
-    opacity: 0.8
+    opacity: 0.9
 });
 const sphere = new THREE.Mesh(geometry, material);
 scene.add(sphere);
 
-// Adicionar um anel ao redor da esfera para melhor visualização
-const ringGeometry = new THREE.RingGeometry(2.5, 3, 32);
-const ringMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffff00,
-    side: THREE.DoubleSide,
+// ======================
+// OBJETO DE TESTE - SEMPRE VISÍVEL
+// ======================
+// Esfera azul fixa na frente da câmera para teste
+const testGeometry = new THREE.SphereGeometry(3, 32, 32);
+const testMaterial = new THREE.MeshBasicMaterial({
+    color: 0x0000ff,
     transparent: true,
-    opacity: 0.6
+    opacity: 0.7
 });
-const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-sphere.add(ring);
+const testSphere = new THREE.Mesh(testGeometry, testMaterial);
+testSphere.position.set(0, 0, -20); // 20 unidades na frente
+scene.add(testSphere);
+
+// Adicionar eixo para visualização
+const axesHelper = new THREE.AxesHelper(10);
+scene.add(axesHelper);
 
 // ======================
 // CAMERA REAL - VÍDEO COMO FUNDO
@@ -136,7 +150,7 @@ let userLat = 0;
 let userLon = 0;
 let distance = 0;
 let bearing = 0;
-let deviceHeading = 0; // Direção que o celular está apontando (0-360)
+let deviceHeading = 0;
 
 // ======================
 // SOLICITAR PERMISSÃO DE ORIENTAÇÃO (iOS 13+)
@@ -153,13 +167,11 @@ function requestOrientationPermission() {
             })
             .catch(console.error);
     } else {
-        // Android e outros navegadores
         window.addEventListener('deviceorientationabsolute', handleOrientation, true);
         window.addEventListener('deviceorientation', handleOrientation, true);
     }
 }
 
-// Detectar se precisa de permissão (iOS)
 if (typeof DeviceOrientationEvent !== 'undefined' && 
     typeof DeviceOrientationEvent.requestPermission === 'function') {
     document.getElementById('permission-btn').style.display = 'block';
@@ -182,12 +194,15 @@ navigator.geolocation.watchPosition(pos => {
     updateSpherePosition();
 
     document.getElementById("ui").innerHTML =
-        "GPS OK<br>" +
+        "GPS OK V5<br>" +
         "Lat: " + userLat.toFixed(6) + "<br>" +
         "Lon: " + userLon.toFixed(6) + "<br>" +
         "Distância: " + distance.toFixed(1) + " m<br>" +
         "Bearing: " + bearing.toFixed(1) + "°<br>" +
-        "Heading: " + deviceHeading.toFixed(1) + "°";
+        "Heading: " + deviceHeading.toFixed(1) + "°<br>" +
+        "Esfera X: " + sphere.position.x.toFixed(2) + "<br>" +
+        "Esfera Y: " + sphere.position.y.toFixed(2) + "<br>" +
+        "Esfera Z: " + sphere.position.z.toFixed(2);
 
 }, err => {
     document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message;
@@ -201,15 +216,12 @@ navigator.geolocation.watchPosition(pos => {
 // DEVICE ORIENTATION (BÚSSOLA)
 // ======================
 function handleOrientation(event) {
-    // webkitCompassHeading é mais preciso no iOS
     if (event.webkitCompassHeading) {
         deviceHeading = event.webkitCompassHeading;
     } else if (event.alpha) {
-        // Android usa alpha (0-360, mas direção oposta)
         deviceHeading = 360 - event.alpha;
     }
     
-    // Atualizar posição da esfera baseado no heading
     updateSpherePosition();
 }
 
@@ -264,18 +276,16 @@ function updateSpherePosition() {
     // Converter para radianos
     const angleRad = angleDiff * Math.PI / 180;
     
-    // Distância no mundo 3D (escala ajustável)
-    // Ajuste este valor para controlar quão longe a esfera aparece
-    const scale = 0.05; // Ajuste conforme necessário
-    const zDistance = -Math.min(distance * scale, 100); // Negativo porque câmera olha para -Z
+    // Distância no mundo 3D - usar distância real em metros
+    // Ajuste o divisor para controlar a escala
+    const zDistance = -Math.min(distance / 10, 100);
     
     // Posicionar esfera baseado no ângulo relativo
     sphere.position.x = Math.sin(angleRad) * Math.abs(zDistance);
+    sphere.position.y = 0;
     sphere.position.z = zDistance;
-    sphere.position.y = 0; // Altura do nível do olho
     
-    // Fazer a esfera sempre olhar para a câmera
-    sphere.lookAt(camera.position);
+    console.log("Esfera posicionada em:", sphere.position);
 }
 
 // ======================
