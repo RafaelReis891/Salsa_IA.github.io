@@ -2,151 +2,183 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>AR Sandbox</title>
+<title>Kart AR Debug</title>
 
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
 <style>
-
-html, body {
+html,body{
     margin:0;
     overflow:hidden;
     font-family:Arial;
 }
 
-#ui{
+#hud{
     position:absolute;
-    top:10px;
-    left:10px;
+    top:0;
+    left:0;
+    width:100%;
     z-index:9999;
-    display:flex;
-    flex-direction:column;
-    gap:5px;
+    color:white;
+    background:rgba(0,0,0,0.75);
+    padding:10px;
+    box-sizing:border-box;
+    font-size:14px;
 }
 
 button{
-    padding:12px;
+    margin:3px;
+    padding:10px;
     font-size:16px;
 }
-
-#log{
-    background:rgba(0,0,0,0.7);
-    color:#00ff00;
-    padding:10px;
-    width:300px;
-    height:180px;
-    overflow:auto;
-}
-
 </style>
 </head>
 <body>
 
-<div id="ui">
+<div id="hud">
 
-    <button onclick="addSphere()">Criar Esfera</button>
+<div id="info">
+Aguardando GPS...
+</div>
 
-    <button onclick="removeSphere()">Remover Esfera</button>
+<br>
 
-    <button onclick="toggleSphere()">Mostrar/Ocultar</button>
-
-    <button onclick="moveNear()">Mover para Frente</button>
-
-    <button onclick="moveFar()">Mover para Longe</button>
-
-    <div id="log"></div>
+<button onclick="toggleSphere()">Mostrar/Ocultar</button>
+<button onclick="increaseScale()">+</button>
+<button onclick="decreaseScale()">-</button>
 
 </div>
 
 <a-scene>
 
-    <a-camera position="0 1.6 0"></a-camera>
+    <a-camera id="cam" position="0 1.6 0"></a-camera>
+
+    <a-sphere
+        id="kartSphere"
+        position="0 1.5 -5"
+        radius="0.5"
+        color="red">
+    </a-sphere>
 
 </a-scene>
 
 <script>
 
-const scene = document.querySelector("a-scene");
-const logDiv = document.getElementById("log");
+// Coordenada fornecida por você
+const targetLat = -22.4420306;
+const targetLon = -46.9526000;
 
-let sphere = null;
+let sphere =
+document.getElementById("kartSphere");
 
-function log(text)
-{
-    logDiv.innerHTML += text + "<br>";
-    logDiv.scrollTop = logDiv.scrollHeight;
+let sphereScale = 1;
+
+function toRad(v){
+    return v * Math.PI / 180;
 }
 
-function addSphere()
+function distanceMeters(lat1, lon1, lat2, lon2)
 {
-    if(sphere)
-    {
-        log("Esfera já existe");
-        return;
-    }
+    const R = 6371000;
 
-    sphere = document.createElement("a-sphere");
+    const dLat = toRad(lat2-lat1);
+    const dLon = toRad(lon2-lon1);
 
-    sphere.setAttribute("radius","0.3");
-    sphere.setAttribute("color","#ff0000");
+    const a =
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLon/2) *
+        Math.sin(dLon/2);
 
-    sphere.setAttribute("position","0 1.5 -3");
+    const c = 2 * Math.atan2(
+        Math.sqrt(a),
+        Math.sqrt(1-a)
+    );
 
-    scene.appendChild(sphere);
-
-    log("Esfera criada");
-}
-
-function removeSphere()
-{
-    if(!sphere) return;
-
-    sphere.remove();
-
-    sphere = null;
-
-    log("Esfera removida");
+    return R * c;
 }
 
 function toggleSphere()
 {
-    if(!sphere) return;
-
-    const visible = sphere.getAttribute("visible");
-
-    sphere.setAttribute("visible", !visible);
-
-    log("Visibilidade: " + !visible);
-}
-
-function moveNear()
-{
-    if(!sphere) return;
+    let vis =
+        sphere.getAttribute("visible");
 
     sphere.setAttribute(
-        "position",
-        "0 1.5 -2"
+        "visible",
+        !vis
     );
-
-    log("Movida para 2m");
 }
 
-function moveFar()
+function increaseScale()
 {
-    if(!sphere) return;
+    sphereScale += 0.2;
 
     sphere.setAttribute(
-        "position",
-        "0 1.5 -10"
+        "scale",
+        `${sphereScale} ${sphereScale} ${sphereScale}`
     );
-
-    log("Movida para 10m");
 }
 
-window.onload = () =>
+function decreaseScale()
 {
-    log("A-Frame carregado");
-};
+    sphereScale -= 0.2;
+
+    if(sphereScale < 0.2)
+        sphereScale = 0.2;
+
+    sphere.setAttribute(
+        "scale",
+        `${sphereScale} ${sphereScale} ${sphereScale}`
+    );
+}
+
+navigator.geolocation.watchPosition(
+    pos =>
+    {
+        const lat =
+            pos.coords.latitude;
+
+        const lon =
+            pos.coords.longitude;
+
+        const accuracy =
+            pos.coords.accuracy;
+
+        const dist =
+            distanceMeters(
+                lat,
+                lon,
+                targetLat,
+                targetLon
+            );
+
+        document.getElementById("info")
+        .innerHTML =
+
+        "<b>SUA POSIÇÃO</b><br>" +
+        "Lat: " + lat.toFixed(6) + "<br>" +
+        "Lon: " + lon.toFixed(6) + "<br>" +
+        "Precisão: " + accuracy.toFixed(1) + "m<br><br>" +
+
+        "<b>ESFERA</b><br>" +
+        "Lat: " + targetLat + "<br>" +
+        "Lon: " + targetLon + "<br><br>" +
+
+        "<b>DISTÂNCIA</b><br>" +
+        dist.toFixed(1) + " metros";
+    },
+    err =>
+    {
+        document.getElementById("info")
+        .innerHTML =
+        "Erro GPS: " + err.message;
+    },
+    {
+        enableHighAccuracy:true,
+        maximumAge:0
+    }
+);
 
 </script>
 
