@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>AR KART CORE - Visual Fixa</title>
+<title>AR KART CORE - Estabilizado</title>
 
 <style>
 body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-serif; }
@@ -13,7 +13,7 @@ body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-
 #ui {
     position: absolute; top: 10px; left: 10px; z-index: 10;
     background: rgba(0, 0, 0, 0.85); color: #00ff00;
-    padding: 12px; font-size: 14px; border-radius: 8px;
+    padding: 12px; font-size: 13px; border-radius: 8px;
     max-width: 300px; line-height: 1.5; border: 1px solid #00ff00;
 }
 
@@ -35,11 +35,11 @@ body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-
 
 <body>
 
-<div id="ui">Inicializando... Aguarde o GPS.</div>
+<div id="ui">Inicializando sensores...</div>
 
 <div class="controls">
     <button id="permission-btn" class="btn">📱 Ativar Sensores</button>
-    <button id="reset-btn" class="btn">🔄 Recalcular Posição</button>
+    <button id="reset-btn" class="btn">🔄 Recalibrar Posição</button>
 </div>
 
 <video id="video" autoplay playsinline muted></video>
@@ -52,24 +52,27 @@ body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-
 // ======================
 const targetLat = -22.4420306;
 const targetLon = -46.9526000;
+const VISUAL_DISTANCE = 40; // Distância fixa para visualização
 
+// Variáveis de Estado
 let originLat = null;
 let originLon = null;
 let currentDistance = 0;
 let targetBearing = 0;
-let deviceHeading = 0;
-let isHeadingValid = false;
 
-// TRUQUE AR: Distância visual fixa para o objeto nunca sumir
-const VISUAL_DISTANCE = 30; // Sempre aparecerá a 30 metros de você
+// Variáveis para SUAVIZAÇÃO (O segredo da estabilidade)
+let rawHeading = 0;
+let smoothedHeading = 0;
+let isHeadingValid = false;
+let lastUpdateLat = null;
+let lastUpdateLon = null;
 
 // ======================
 // 2. THREE.JS SETUP
 // ======================
 const scene = new THREE.Scene();
-
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
-camera.position.set(0, 1.6, 0); 
+camera.position.set(0, 1.6, 0);
 camera.lookAt(0, 1.6, -1);
 
 const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
@@ -77,29 +80,16 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
 document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-// ======================
-// 3. OBJETOS NO MUNDO
-// ======================
-
-// CUBO VERDE DE DEBUG (Sempre a 15m à frente para provar que o 3D funciona)
-const debugGeo = new THREE.BoxGeometry(2, 2, 2);
-const debugMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
-const debugCube = new THREE.Mesh(debugGeo, debugMat);
-debugCube.position.set(0, 1.6, -15);
-scene.add(debugCube);
-
-// GRUPO DO ALVO (ESFERA VERMELHA)
+// --- OBJETO ALVO ---
 const targetGroup = new THREE.Group();
 scene.add(targetGroup);
 
-// Esfera maior e bem visível
 const sphereGeo = new THREE.SphereGeometry(1.5, 32, 32);
 const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.9 });
 const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-sphere.position.y = 2; // Flutuando um pouco mais alto para facilitar a visão
+sphere.position.y = 2;
 targetGroup.add(sphere);
 
-// Anel amarelo
 const ringGeo = new THREE.RingGeometry(2, 2.3, 32);
 const ringMat = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
 const ring = new THREE.Mesh(ringGeo, ringMat);
@@ -107,41 +97,51 @@ ring.rotation.x = Math.PI / 2;
 ring.position.y = 2;
 targetGroup.add(ring);
 
-// Base no "chão" para dar noção de profundidade
+// Base no chão para referência
 const baseGeo = new THREE.CylinderGeometry(0.2, 0.2, 2, 8);
 const baseMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 });
 const base = new THREE.Mesh(baseGeo, baseMat);
 base.position.y = 1;
 targetGroup.add(base);
 
-// Garante que nunca será cortado pela câmera
 sphere.frustumCulled = false;
 ring.frustumCulled = false;
 base.frustumCulled = false;
 
 // ======================
-// 4. CÂMERA DO CELULAR
+// 3. CÂMERA
 // ======================
 navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
 .then(stream => {
     document.getElementById("video").srcObject = stream;
 })
 .catch(err => {
-    document.getElementById("ui").innerHTML = "ERRO CÂMERA:<br>" + err.message;
+    document.getElementById("ui").innerHTML = "ERRO CÂMERA: " + err.message;
 });
 
 // ======================
-// 5. GPS
+// 4. GPS COM TRAVA DE MOVIMENTO
 // ======================
 function processGPS(lat, lon, accuracy) {
     if (originLat === null) {
         originLat = lat;
         originLon = lon;
+        lastUpdateLat = lat;
+        lastUpdateLon = lon;
         document.getElementById("reset-btn").style.display = "block";
     }
 
     currentDistance = getDistance(lat, lon, targetLat, targetLon);
-    targetBearing = getBearing(lat, lon, targetLat, targetLon);
+    
+    // TRAVA DE MOVIMENTO: Só recalcula a direção se o usuário andar mais de 5 metros
+    // Isso ignora o "drift" do GPS quando você está parado
+    const distMoved = getDistance(lat, lon, lastUpdateLat, lastUpdateLon);
+    
+    if (distMoved > 5.0 || targetBearing === 0) {
+        targetBearing = getBearing(lat, lon, targetLat, targetLon);
+        lastUpdateLat = lat;
+        lastUpdateLon = lon;
+    }
 
     updateUI(accuracy);
 }
@@ -149,38 +149,52 @@ function processGPS(lat, lon, accuracy) {
 navigator.geolocation.watchPosition(pos => {
     processGPS(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
 }, err => {
-    document.getElementById("ui").innerHTML = "ERRO GPS:<br>" + err.message;
+    document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message;
 }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
 document.getElementById("reset-btn").addEventListener("click", () => {
     originLat = null;
-    originLon = null;
-    document.getElementById("ui").innerHTML = "🔄 Recalibrando... Fique parado em local aberto.";
+    lastUpdateLat = null;
+    targetBearing = 0;
+    document.getElementById("ui").innerHTML = "🔄 Recalibrando... Fique parado.";
 });
 
 function updateUI(accuracy) {
-    const status = originLat === null ? "⏳ Aguardando primeiro sinal de GPS..." : "✅ GPS Travado";
-    const headingStatus = isHeadingValid ? `${deviceHeading.toFixed(0)}°` : "Calibrando bússola...";
+    const status = originLat === null ? "⏳ Aguardando GPS..." : "✅ GPS Estabilizado";
+    const headingStatus = isHeadingValid ? `${smoothedHeading.toFixed(0)}°` : "Calibrando...";
     
     document.getElementById("ui").innerHTML = 
         `${status}<br>` +
         `🎯 Distância REAL: <b>${currentDistance.toFixed(1)} m</b><br>` +
         `🧭 Alvo está a: <b>${targetBearing.toFixed(0)}°</b><br>` +
         `📱 Celular aponta: <b>${headingStatus}</b><br>` +
-        `📏 Precisão GPS: ${accuracy.toFixed(1)}m<br>` +
-        `<small style="color:#ffff00">💡 Dica: A esfera foi trazida para 30m de você para facilitar a visualização. Siga a direção dela!</small>`;
+        `📏 Precisão: ${accuracy.toFixed(1)}m<br>` +
+        `<small style="color:#00ffff">💡 A esfera está travada no mundo. Se derivar, clique em Recalibrar.</small>`;
 }
 
 // ======================
-// 6. BÚSSOLA (ORIENTAÇÃO)
+// 5. BÚSSOLA COM SUAVIZAÇÃO (LOW-PASS FILTER)
 // ======================
 function handleOrientation(event) {
     isHeadingValid = true;
     if (event.webkitCompassHeading !== undefined) {
-        deviceHeading = event.webkitCompassHeading; // iOS
+        rawHeading = event.webkitCompassHeading;
     } else if (event.alpha !== null) {
-        deviceHeading = (360 - event.alpha) % 360; // Android
+        rawHeading = (360 - event.alpha) % 360;
     }
+
+    // SUAVIZAÇÃO INTELIGENTE (Lida com a transição de 359° para 0°)
+    let diff = rawHeading - smoothedHeading;
+    // Encontra o caminho mais curto para girar
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+    
+    // Aplica o filtro (0.15 = suave e estável, 1.0 = instantâneo e tremido)
+    smoothedHeading += diff * 0.15;
+    
+    // Mantém o valor entre 0 e 360
+    if (smoothedHeading < 0) smoothedHeading += 360;
+    if (smoothedHeading >= 360) smoothedHeading -= 360;
 }
 
 function requestPermission() {
@@ -208,7 +222,7 @@ if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEve
 }
 
 // ======================
-// 7. MATEMÁTICA
+// 6. MATEMÁTICA
 // ======================
 function getBearing(lat1, lon1, lat2, lon2) {
     const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -229,37 +243,24 @@ function getDistance(lat1, lon1, lat2, lon2) {
 }
 
 // ======================
-// 8. LOOP DE ANIMAÇÃO (LÓGICA CORRIGIDA)
+// 7. LOOP DE ANIMAÇÃO ESTABILIZADO
 // ======================
-let time = 0;
-
 function animate() {
     requestAnimationFrame(animate);
-    time += 0.05;
 
-    // Animação do cubo de debug (prova que o renderizador está vivo)
-    debugCube.rotation.y += 0.01;
-
-    // LÓGICA PRINCIPAL: Posicionamento Relativo com Distância Fixa
-    if (originLat !== null && isHeadingValid) {
-        // 1. Calcula o ângulo relativo entre o alvo e para onde o celular aponta
-        let relativeAngle = targetBearing - deviceHeading;
+    if (originLat !== null && isHeadingValid && targetBearing !== 0) {
+        // Calcula o ângulo relativo entre o alvo e a direção suavizada do celular
+        let relativeAngle = targetBearing - smoothedHeading;
         
-        // 2. Normaliza para ficar entre -180 e 180 graus
         while (relativeAngle > 180) relativeAngle -= 360;
         while (relativeAngle < -180) relativeAngle += 360;
 
         const rad = relativeAngle * (Math.PI / 180);
 
-        // 3. POSICIONA SEMPRE A 'VISUAL_DISTANCE' (30m) DE DISTÂNCIA
-        // Isso impede que o objeto vá para 500m e suma, ou fique em 0m e fique invisível
+        // Posiciona o objeto
         targetGroup.position.x = VISUAL_DISTANCE * Math.sin(rad);
         targetGroup.position.z = -VISUAL_DISTANCE * Math.cos(rad);
-        targetGroup.position.y = 0; // Base no chão
-
-        // 4. Animação de "pulsar" para chamar atenção e provar que está renderizando
-        const scalePulse = 1 + Math.sin(time) * 0.1;
-        targetGroup.scale.set(scalePulse, scalePulse, scalePulse);
+        targetGroup.position.y = 0;
     }
 
     renderer.render(scene, camera);
