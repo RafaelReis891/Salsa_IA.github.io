@@ -61,10 +61,8 @@ document.body.appendChild(renderer.domElement);
 
 // esfera (kart)
 const geometry = new THREE.SphereGeometry(0.5, 16, 16);
-const material = new THREE.MeshBasicMaterial({color:0xff0000});
+const material = new THREE.MeshBasicMaterial({color:0x00ff00});
 const sphere = new THREE.Mesh(geometry, material);
-
-sphere.position.z = -5;
 scene.add(sphere);
 
 // luz (opcional)
@@ -87,22 +85,33 @@ const video = document.getElementById("video");
 // ======================
 let userLat = 0;
 let userLon = 0;
+let distance = 0;
+let bearing = 0;
 
 navigator.geolocation.watchPosition(pos => {
 
     userLat = pos.coords.latitude;
     userLon = pos.coords.longitude;
 
-    const dist = getDistance(
+    distance = getDistance(
         userLat, userLon,
         targetLat, targetLon
     );
+
+    bearing = getBearing(
+        userLat, userLon,
+        targetLat, targetLon
+    );
+
+    // Atualizar posição da esfera baseada em bearing e distância
+    updateSpherePosition();
 
     document.getElementById("ui").innerHTML =
         "GPS OK<br>" +
         "Lat: " + userLat.toFixed(6) + "<br>" +
         "Lon: " + userLon.toFixed(6) + "<br>" +
-        "Distância: " + dist.toFixed(1) + " m";
+        "Distância: " + distance.toFixed(1) + " m<br>" +
+        "Bearing: " + bearing.toFixed(1) + "°";
 
 }, err => {
     document.getElementById("ui").innerHTML =
@@ -110,35 +119,111 @@ navigator.geolocation.watchPosition(pos => {
 });
 
 // ======================
+// DEVICE ORIENTATION (BÚSSOLA)
+// ======================
+let deviceAlpha = 0; // Rotação em Z (bússola)
+let deviceBeta = 0;  // Rotação em X (frente/trás)
+let deviceGamma = 0; // Rotação em Y (esquerda/direita)
+
+window.addEventListener('deviceorientation', (event) => {
+    deviceAlpha = event.alpha || 0; // 0-360 graus
+    deviceBeta = event.beta || 0;   // -180 a 180 graus
+    deviceGamma = event.gamma || 0; // -90 a 90 graus
+    
+    // Rotacionar câmera baseado na orientação do dispositivo
+    updateCameraRotation();
+}, true);
+
+// ======================
+// CALCULAR BEARING (AZIMUTE)
+// ======================
+function getBearing(lat1, lon1, lat2, lon2) {
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const lat1Rad = lat1 * Math.PI / 180;
+    const lat2Rad = lat2 * Math.PI / 180;
+    
+    const y = Math.sin(dLon) * Math.cos(lat2Rad);
+    const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+              Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+    
+    let bearing = Math.atan2(y, x) * 180 / Math.PI;
+    bearing = (bearing + 360) % 360; // Normalizar para 0-360
+    
+    return bearing;
+}
+
+// ======================
 // DISTÂNCIA REAL
 // ======================
 function getDistance(lat1, lon1, lat2, lon2) {
-
     const R = 6371000;
-
     const dLat = (lat2-lat1) * Math.PI/180;
     const dLon = (lon2-lon1) * Math.PI/180;
-
+    
     const a =
         Math.sin(dLat/2)**2 +
         Math.cos(lat1*Math.PI/180) *
         Math.cos(lat2*Math.PI/180) *
         Math.sin(dLon/2)**2;
-
+    
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ======================
+// ATUALIZAR POSIÇÃO DA ESFERA
+// ======================
+function updateSpherePosition() {
+    // Converter bearing para radianos
+    const bearingRad = bearing * Math.PI / 180;
+    
+    // Escalar distância para o mundo 3D (ajuste conforme necessário)
+    const scale = 0.1; // Ajuste este valor para controlar o tamanho do mundo AR
+    const scaledDistance = Math.min(distance * scale, 50); // Limitar distância máxima
+    
+    // Calcular posição X e Z baseada em bearing
+    // Bearing 0° = Norte (Z negativo), 90° = Leste (X positivo)
+    sphere.position.x = scaledDistance * Math.sin(bearingRad);
+    sphere.position.z = -scaledDistance * Math.cos(bearingRad);
+    sphere.position.y = 0; // Altura fixa (ajuste se necessário)
+}
+
+// ======================
+// ATUALIZAR ROTAÇÃO DA CÂMERA
+// ======================
+function updateCameraRotation() {
+    // Converter graus para radianos
+    const alphaRad = deviceAlpha * Math.PI / 180;
+    const betaRad = deviceBeta * Math.PI / 180;
+    const gammaRad = deviceGamma * Math.PI / 180;
+    
+    // Aplicar rotação à câmera
+    // Alpha: rotação em Y (bússola)
+    // Beta: rotação em X (inclinação frente/trás)
+    // Gamma: rotação em Z (inclinação esquerda/direita)
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = -alphaRad;
+    camera.rotation.x = betaRad - Math.PI / 2; // Ajuste para orientação paisagem
+    camera.rotation.z = -gammaRad;
 }
 
 // ======================
 // LOOP
 // ======================
 function animate() {
-
     requestAnimationFrame(animate);
-
     renderer.render(scene, camera);
 }
 
 animate();
+
+// ======================
+// RESIZE
+// ======================
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
 </script>
 
