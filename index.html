@@ -2,65 +2,32 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kart AR Engine PRO</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR KART CORE - À Prova de Falhas</title>
 
 <style>
-body {
-    margin:0;
-    overflow:hidden;
-    background:black;
-    font-family:Arial;
+body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-serif; }
+#video { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+#canvas-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+
+#ui {
+    position: absolute; top: 10px; left: 10px; z-index: 10;
+    background: rgba(0, 0, 0, 0.85); color: #00ff00;
+    padding: 12px; font-size: 13px; border-radius: 8px;
+    max-width: 300px; line-height: 1.5; border: 1px solid #00ff00;
 }
 
-/* CAMERA */
-#video {
-    position:fixed;
-    top:0;
-    left:0;
-    width:100%;
-    height:100%;
-    object-fit:cover;
-    z-index:0;
+.controls {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 100; display: flex; flex-direction: column; gap: 10px; width: 90%; max-width: 300px;
 }
 
-/* CANVAS 3D */
-canvas {
-    position:fixed;
-    top:0;
-    left:0;
-    z-index:1;
+.btn {
+    padding: 15px; font-size: 16px; font-weight: bold; border: none;
+    border-radius: 30px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center;
 }
-
-/* HUD */
-#hud {
-    position:fixed;
-    top:10px;
-    left:10px;
-    z-index:10;
-    background:rgba(0,0,0,0.75);
-    color:#00ff00;
-    padding:12px;
-    font-size:13px;
-    border-radius:8px;
-    max-width:320px;
-    line-height:1.4;
-}
-
-/* BOTÃO */
-button {
-    position:fixed;
-    bottom:20px;
-    left:50%;
-    transform:translateX(-50%);
-    z-index:10;
-    padding:14px 20px;
-    font-size:16px;
-    border-radius:30px;
-    border:none;
-    background:#ff3b3b;
-    color:white;
-}
+#permission-btn { background: #007bff; color: white; }
+#reset-btn { background: #ff9800; color: white; display: none; }
 </style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -68,184 +35,236 @@ button {
 
 <body>
 
-<video id="video" autoplay playsinline muted></video>
-<div id="hud">Inicializando...</div>
+<div id="ui">Inicializando... Aguarde o GPS.</div>
 
-<button onclick="resetOrigin()">📍 Recalibrar origem</button>
+<div class="controls">
+    <button id="permission-btn" class="btn">📱 Ativar Sensores</button>
+    <button id="reset-btn" class="btn">🔄 Recalcular Posição</button>
+</div>
+
+<video id="video" autoplay playsinline muted></video>
+<div id="canvas-container"></div>
 
 <script>
 
-// ==========================
-// TARGET (KART)
-// ==========================
+// ======================
+// 1. CONFIGURAÇÕES
+// ======================
 const targetLat = -22.4420306;
 const targetLon = -46.9526000;
 
-// ==========================
-// ORIGEM (usuário)
-// ==========================
 let originLat = null;
 let originLon = null;
+let currentDistance = 0;
+let targetBearing = 0;
+let deviceHeading = 0;
+let isHeadingValid = false;
 
-// suavização GPS
-let smoothLat = null;
-let smoothLon = null;
-
-// heading
-let heading = 0;
-
-// ==========================
-// THREE SETUP
-// ==========================
+// ======================
+// 2. THREE.JS SETUP
+// ======================
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(
-    70,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    10000
-);
+// Câmera FIXA olhando para frente (-Z). NÃO vamos girar a câmera com a bússola.
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 20000);
+camera.position.set(0, 1.6, 0); // Altura dos olhos
+camera.lookAt(0, 1.6, -1);
 
-const renderer = new THREE.WebGLRenderer({ alpha:true, antialias:true });
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
+renderer.setClearColor(0x000000, 0);
+document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-// ==========================
-// OBJETO KART
-// ==========================
-const kart = new THREE.Mesh(
-    new THREE.SphereGeometry(0.5, 24, 24),
-    new THREE.MeshBasicMaterial({ color:0xff0000 })
-);
+// ======================
+// 3. OBJETOS NO MUNDO
+// ======================
 
-scene.add(kart);
+// --- OBJETO DE DEBUG (CUBO VERDE) ---
+// Este objeto SEMPRE fica a 10 metros na sua frente. 
+// Se você NÃO ver isso, o problema é seu navegador/câmera, não o GPS.
+const debugGeo = new THREE.BoxGeometry(2, 2, 2);
+const debugMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.7 });
+const debugCube = new THREE.Mesh(debugGeo, debugMat);
+debugCube.position.set(0, 1.6, -10); // 10 metros à frente
+scene.add(debugCube);
 
-// ==========================
-// CAMERA REAL
-// ==========================
-navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" }
-}).then(stream => {
+// --- OBJETO ALVO (ESFERA VERMELHA) ---
+const targetGroup = new THREE.Group();
+scene.add(targetGroup);
+
+const sphereGeo = new THREE.SphereGeometry(1, 32, 32);
+const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.9 });
+const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+sphere.position.y = 1.5;
+targetGroup.add(sphere);
+
+const ringGeo = new THREE.RingGeometry(1.4, 1.6, 32);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = Math.PI / 2;
+ring.position.y = 1.5;
+targetGroup.add(ring);
+
+// Impede que o objeto suma se o cálculo de distância for enorme
+sphere.frustumCulled = false;
+ring.frustumCulled = false;
+
+// ======================
+// 4. CÂMERA DO CELULAR
+// ======================
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+.then(stream => {
     document.getElementById("video").srcObject = stream;
+})
+.catch(err => {
+    document.getElementById("ui").innerHTML = "ERRO CÂMERA:<br>" + err.message;
 });
 
-// ==========================
-// UTIL: GPS → METROS
-// ==========================
-function latLonToMeters(lat, lon)
-{
-    const R = 6378137;
+// ======================
+// 5. GPS
+// ======================
+function processGPS(lat, lon, accuracy) {
+    if (originLat === null) {
+        originLat = lat;
+        originLon = lon;
+        document.getElementById("reset-btn").style.display = "block";
+    }
 
-    const dLat = (lat - originLat) * Math.PI/180;
-    const dLon = (lon - originLon) * Math.PI/180;
+    currentDistance = getDistance(lat, lon, targetLat, targetLon);
+    targetBearing = getBearing(lat, lon, targetLat, targetLon);
 
-    const x = dLon * R * Math.cos(originLat * Math.PI/180);
-    const z = dLat * R;
-
-    return { x, z };
+    updateUI(accuracy);
 }
 
-// distância
-function distance(aLat,aLon,bLat,bLon)
-{
-    const R = 6371000;
-    const dLat = (bLat-aLat)*Math.PI/180;
-    const dLon = (bLon-aLon)*Math.PI/180;
-
-    const a =
-        Math.sin(dLat/2)**2 +
-        Math.cos(aLat*Math.PI/180) *
-        Math.cos(bLat*Math.PI/180) *
-        Math.sin(dLon/2)**2;
-
-    return R * 2 * Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
-}
-
-// ==========================
-// GPS
-// ==========================
 navigator.geolocation.watchPosition(pos => {
+    processGPS(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+}, err => {
+    document.getElementById("ui").innerHTML = "ERRO GPS:<br>" + err.message;
+}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
-    let lat = pos.coords.latitude;
-    let lon = pos.coords.longitude;
-
-    // suavização simples (anti jitter)
-    if(smoothLat === null) {
-        smoothLat = lat;
-        smoothLon = lon;
-    }
-
-    smoothLat = smoothLat * 0.85 + lat * 0.15;
-    smoothLon = smoothLon * 0.85 + lon * 0.15;
-
-    if(originLat === null)
-    {
-        originLat = smoothLat;
-        originLon = smoothLon;
-    }
-
-    // posição do usuário no mundo local
-    const user = latLonToMeters(smoothLat, smoothLon);
-
-    camera.position.x = user.x;
-    camera.position.z = user.z;
-
-    // alvo
-    const tgt = latLonToMeters(targetLat, targetLon);
-
-    kart.position.x = tgt.x;
-    kart.position.z = tgt.z;
-    kart.position.y = 1.5;
-
-    const dist = distance(smoothLat,smoothLon,targetLat,targetLon);
-
-    document.getElementById("hud").innerHTML =
-        "📍 USER<br>" +
-        smoothLat.toFixed(6) + " / " + smoothLon.toFixed(6) + "<br><br>" +
-
-        "🎯 KART<br>" +
-        targetLat + " / " + targetLon + "<br><br>" +
-
-        "📏 DISTÂNCIA<br>" +
-        dist.toFixed(1) + " m";
-
-});
-
-// ==========================
-// BÚSSOLA (somente Y)
-// ==========================
-window.addEventListener("deviceorientation", e => {
-
-    if(e.alpha !== null)
-    {
-        heading = (360 - e.alpha) * Math.PI/180;
-
-        // só rotação horizontal (IMPORTANTE)
-        camera.rotation.y = heading;
-    }
-});
-
-// ==========================
-// RESET
-// ==========================
-function resetOrigin()
-{
+document.getElementById("reset-btn").addEventListener("click", () => {
     originLat = null;
     originLon = null;
+    document.getElementById("ui").innerHTML = "🔄 Recalibrando... Fique parado em local aberto.";
+});
+
+function updateUI(accuracy) {
+    const status = originLat === null ? "⏳ Aguardando GPS..." : "✅ GPS Travado";
+    const headingStatus = isHeadingValid ? `${deviceHeading.toFixed(0)}°` : "Calibrando...";
+    
+    document.getElementById("ui").innerHTML = 
+        `${status}<br>` +
+        `🎯 Distância: <b>${currentDistance.toFixed(1)} m</b><br>` +
+        `🧭 Alvo está a: <b>${targetBearing.toFixed(0)}°</b><br>` +
+        `📱 Celular aponta: <b>${headingStatus}</b><br>` +
+        `📏 Precisão GPS: ${accuracy.toFixed(1)}m<br>` +
+        `<small style="color:#aaa">Dica: Se não ver a esfera, gire 360° devagar.</small>`;
 }
 
-// ==========================
-// LOOP
-// ==========================
-function animate()
-{
+// ======================
+// 6. BÚSSOLA (ORIENTAÇÃO)
+// ======================
+function handleOrientation(event) {
+    isHeadingValid = true;
+    if (event.webkitCompassHeading !== undefined) {
+        deviceHeading = event.webkitCompassHeading; // iOS
+    } else if (event.alpha !== null) {
+        deviceHeading = (360 - event.alpha) % 360; // Android
+    }
+}
+
+function requestPermission() {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+            .then(state => {
+                if (state === 'granted') {
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                    document.getElementById('permission-btn').style.display = 'none';
+                }
+            })
+            .catch(console.error);
+    } else {
+        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.addEventListener('deviceorientation', handleOrientation, true);
+        document.getElementById('permission-btn').style.display = 'none';
+    }
+}
+
+if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    document.getElementById("permission-btn").style.display = "block";
+    document.getElementById("permission-btn").addEventListener("click", requestPermission);
+} else {
+    requestPermission();
+}
+
+// ======================
+// 7. MATEMÁTICA
+// ======================
+function getBearing(lat1, lon1, lat2, lon2) {
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const lat1Rad = lat1 * Math.PI / 180;
+    const lat2Rad = lat2 * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(lat2Rad);
+    const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+    let brng = Math.atan2(y, x) * 180 / Math.PI;
+    return (brng + 360) % 360;
+}
+
+function getDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ======================
+// 8. LOOP DE ANIMAÇÃO (A MÁGICA ACONTECE AQUI)
+// ======================
+function animate() {
     requestAnimationFrame(animate);
-    renderer.render(scene,camera);
-}
 
+    // Se temos GPS e Bússola, calculamos a posição RELATIVA à câmera
+    if (originLat !== null && isHeadingValid) {
+        // Qual a diferença entre para onde o alvo está e para onde eu estou olhando?
+        let relativeAngle = targetBearing - deviceHeading;
+        
+        // Normaliza para ficar entre -180 e 180 graus
+        while (relativeAngle > 180) relativeAngle -= 360;
+        while (relativeAngle < -180) relativeAngle += 360;
+
+        const rad = relativeAngle * (Math.PI / 180);
+
+        // Posiciona o objeto em um círculo ao redor da câmera
+        targetGroup.position.x = currentDistance * Math.sin(rad);
+        targetGroup.position.z = -currentDistance * Math.cos(rad); // Negativo porque a câmera olha para -Z
+        targetGroup.position.y = 1.5;
+
+        // TRUQUE INFALÍVEL: Faz a esfera crescer conforme a distância aumenta
+        // Assim, mesmo que o alvo esteja a 500m, a esfera terá tamanho visível
+        const dynamicScale = Math.max(1, currentDistance * 0.05); 
+        targetGroup.scale.set(dynamicScale, dynamicScale, dynamicScale);
+
+        // Faz a esfera e o anel sempre "olharem" para a câmera (efeito billboard)
+        // para garantir que você veja o círculo e não apenas uma linha de lado
+        sphere.lookAt(camera.position);
+        ring.lookAt(camera.position);
+    }
+
+    // Animação do cubo de debug para provar que o renderizador está vivo
+    debugCube.rotation.y += 0.01;
+    debugCube.rotation.x += 0.005;
+
+    renderer.render(scene, camera);
+}
 animate();
 
-</script>
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
+</script>
 </body>
 </html>
