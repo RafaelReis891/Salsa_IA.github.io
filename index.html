@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>AR KART CORE - Origem Fixa</title>
+<title>AR KART CORE - Estável</title>
 
 <style>
 body {
@@ -37,33 +37,48 @@ body {
     top: 10px;
     left: 10px;
     z-index: 10;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.8);
     color: #00ff00;
     padding: 12px;
     font-size: 13px;
     border-radius: 8px;
-    max-width: 260px;
-    line-height: 1.4;
+    max-width: 280px;
+    line-height: 1.5;
+    border: 1px solid #00ff00;
 }
 
-.btn {
+.controls {
     position: fixed;
-    bottom: 30px;
+    bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 100;
-    padding: 15px 25px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 90%;
+    max-width: 300px;
+}
+
+.btn {
+    padding: 15px;
     font-size: 16px;
     font-weight: bold;
     border: none;
     border-radius: 30px;
     cursor: pointer;
     box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-    display: none;
+    text-align: center;
 }
 
 #permission-btn { background: #007bff; color: white; }
-#recalibrate-btn { background: #ff9800; color: white; display: block; }
+#recalibrate-gps-btn { background: #ff9800; color: white; display: none; }
+#recalibrate-compass-btn { background: #9c27b0; color: white; display: none; }
+
+.warning {
+    color: #ffeb3b;
+    font-weight: bold;
+}
 </style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -71,10 +86,13 @@ body {
 
 <body>
 
-<div id="ui">Aguardando GPS...</div>
+<div id="ui">Inicializando sistemas...</div>
 
-<button id="permission-btn" class="btn">📱 Ativar Sensores</button>
-<button id="recalibrate-btn" class="btn">🧭 Recalibrar Bússola</button>
+<div class="controls">
+    <button id="permission-btn" class="btn">📱 Ativar Sensores de Movimento</button>
+    <button id="recalibrate-gps-btn" class="btn">📍 Recalibrar POSIÇÃO (GPS)</button>
+    <button id="recalibrate-compass-btn" class="btn">🧭 Recalibrar DIREÇÃO (Bússola)</button>
+</div>
 
 <video id="video" autoplay playsinline muted></video>
 <div id="canvas-container"></div>
@@ -89,134 +107,143 @@ const targetLon = -46.9526000;
 
 let originLat = null;
 let originLon = null;
-let currentDistance = 0;
-let currentBearing = 0;
-let deviceHeading = 0;
+let currentHeading = 0;
 
 // ======================
 // 2. THREE.JS SETUP
 // ======================
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(
-    75,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    10000
-);
-camera.rotation.order = 'YXZ'; // Essencial para rotação de bússola
-camera.position.set(0, 1.6, 0); // Altura dos olhos (1.6m)
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+camera.rotation.order = 'YXZ';
+camera.position.set(0, 1.6, 0); // Altura dos olhos
 
 const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
 document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-// ======================
-// 3. CRIAR O ALVO NO MUNDO (TAMANHO REDUZIDO)
-// ======================
+// --- OBJETO ALVO ---
 const targetGroup = new THREE.Group();
 scene.add(targetGroup);
 
-// Esfera menor (raio 0.5m)
-const sphereGeo = new THREE.SphereGeometry(0.5, 32, 32);
+// Esfera
+const sphereGeo = new THREE.SphereGeometry(0.8, 32, 32);
 const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.9 });
 const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-sphere.position.y = 1.5; // Flutuando a 1.5m do chão
+sphere.position.y = 1.5;
 targetGroup.add(sphere);
 
-// Anel amarelo
-const ringGeo = new THREE.RingGeometry(0.7, 0.8, 32);
+// Anel
+const ringGeo = new THREE.RingGeometry(1.1, 1.3, 32);
 const ringMat = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
 const ring = new THREE.Mesh(ringGeo, ringMat);
 ring.rotation.x = Math.PI / 2;
 ring.position.y = 1.5;
 targetGroup.add(ring);
 
-// POSTE: Linha vertical do chão até a esfera (ajuda MUITO a achar no 3D)
-const poleGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.5, 8);
-const poleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+// Poste (ajuda a ver a profundidade)
+const poleGeo = new THREE.CylinderGeometry(0.08, 0.08, 1.5, 8);
+const poleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
 const pole = new THREE.Mesh(poleGeo, poleMat);
-pole.position.y = 0.75; // Metade da altura
+pole.position.y = 0.75;
 targetGroup.add(pole);
 
+// Impede que o objeto suma se a câmera girar muito rápido (frustum culling)
+sphere.frustumCulled = false;
+ring.frustumCulled = false;
+pole.frustumCulled = false;
+
 // ======================
-// 4. CÂMERA DO CELULAR
+// 3. CÂMERA DO CELULAR
 // ======================
-navigator.mediaDevices.getUserMedia({ 
-    video: { facingMode: "environment" } 
-})
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
 .then(stream => {
     document.getElementById("video").srcObject = stream;
 })
 .catch(err => {
-    document.getElementById("ui").innerHTML = "ERRO CÂMERA: " + err.message;
+    document.getElementById("ui").innerHTML = "ERRO CÂMERA:<br>" + err.message;
 });
 
 // ======================
-// 5. GPS E LÓGICA DE ORIGEM FIXA
+// 4. LÓGICA DE GPS
 // ======================
 function setupWorld(lat, lon) {
     originLat = lat;
     originLon = lon;
 
-    // Calcula a distância e direção do PONTO ZERO até o alvo
     const dist = getDistance(originLat, originLon, targetLat, targetLon);
     const bear = getBearing(originLat, originLon, targetLat, targetLon);
     const bearRad = bear * (Math.PI / 180);
 
-    // Posiciona o alvo no mundo 3D baseado no ponto zero
-    // X = Leste/Oeste, Z = Norte/Sul (Negativo é Norte no Three.js)
+    // Fixa o alvo no mundo 3D baseado no ponto de origem
     targetGroup.position.x = dist * Math.sin(bearRad);
     targetGroup.position.z = -dist * Math.cos(bearRad);
-    targetGroup.position.y = 0; // Base do poste no chão
+    targetGroup.position.y = 0;
+    
+    console.log("Mundo travado em:", originLat, originLon, "Distância calculada:", dist);
+}
 
+function updateUI(dist, bear, accuracy, heading) {
+    let accuracyWarning = accuracy > 30 ? '<br><span class="warning">⚠️ Precisão baixa! Vá para área aberta.</span>' : '';
+    
     document.getElementById("ui").innerHTML = 
-        `✅ GPS Travado<br>` +
-        `🎯 Distância real: ${dist.toFixed(1)} m<br>` +
-        `🧭 Direção do alvo: ${bear.toFixed(0)}°<br>` +
-        `<small>Aponte o celular para ${bear.toFixed(0)}°</small>`;
+        `✅ GPS Ativo (Precisão: ${accuracy.toFixed(1)}m)${accuracyWarning}<br>` +
+        `🎯 Distância atual: <b>${dist.toFixed(1)} m</b><br>` +
+        `🧭 Direção do alvo: <b>${bear.toFixed(0)}°</b><br>` +
+        `📱 Sua bússola aponta: <b>${heading.toFixed(0)}°</b><br>` +
+        `<small>Posição 3D: X:${targetGroup.position.x.toFixed(1)} Z:${targetGroup.position.z.toFixed(1)}</small>`;
 }
 
 navigator.geolocation.watchPosition(pos => {
-    // Se ainda não temos um ponto de origem, definimos agora
-    if (originLat === null && pos.coords.accuracy < 20) { // Só aceita se a precisão for boa (< 20m)
-        setupWorld(pos.coords.latitude, pos.coords.longitude);
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    const accuracy = pos.coords.accuracy;
+
+    // Se ainda não travou a origem, trava agora
+    if (originLat === null) {
+        setupWorld(lat, lon);
+        document.getElementById("recalibrate-gps-btn").style.display = "block";
+        document.getElementById("recalibrate-compass-btn").style.display = "block";
     }
-    
-    // Atualiza a distância atual apenas para informação na tela
-    if (originLat !== null) {
-        currentDistance = getDistance(pos.coords.latitude, pos.coords.longitude, targetLat, targetLon);
-    }
+
+    // Calcula distância e direção em TEMPO REAL da posição ATUAL até o alvo
+    const currentDist = getDistance(lat, lon, targetLat, targetLon);
+    const currentBear = getBearing(lat, lon, targetLat, targetLon);
+
+    // Atualiza a tela continuamente
+    updateUI(currentDist, currentBear, accuracy, currentHeading);
+
 }, err => {
-    document.getElementById("ui").innerHTML = "ERRO GPS: " + err.message + "<br><small>Ative o GPS de alta precisão</small>";
+    document.getElementById("ui").innerHTML = "ERRO GPS:<br>" + err.message + "<br><small>Verifique se o GPS está ativado no celular.</small>";
 }, {
     enableHighAccuracy: true,
     maximumAge: 0,
     timeout: 10000
 });
 
-// Função para forçar novo ponto zero (útil se o GPS inicial foi ruim)
-document.getElementById("recalibrate-btn").addEventListener("click", () => {
+// Botão Recalibrar GPS
+document.getElementById("recalibrate-gps-btn").addEventListener("click", () => {
     originLat = null;
-    document.getElementById("ui").innerHTML = "Recalibrando... Aguarde o GPS travar.";
+    originLon = null;
+    document.getElementById("ui").innerHTML = "🔄 Recalibrando GPS...<br>Aguarde a próxima leitura.";
 });
 
 // ======================
-// 6. ORIENTAÇÃO (BÚSSOLA)
+// 5. LÓGICA DA BÚSSOLA
 // ======================
 function handleOrientation(event) {
-    if (event.webkitCompassHeading) {
-        deviceHeading = event.webkitCompassHeading; // iOS
+    if (event.webkitCompassHeading !== undefined) {
+        currentHeading = event.webkitCompassHeading; // iOS
     } else if (event.alpha !== null) {
-        deviceHeading = 360 - event.alpha; // Android
+        currentHeading = (360 - event.alpha) % 360; // Android
     }
 
-    // Gira APENAS a câmera. O mundo (targetGroup) fica parado.
-    const headingRad = deviceHeading * (Math.PI / 180);
+    // Gira a câmera para corresponder à bússola
+    const headingRad = currentHeading * (Math.PI / 180);
     camera.rotation.y = -headingRad;
     
-    // Inclinação suave (opcional, melhora a imersão)
+    // Inclinação do celular (opcional, mas melhora a imersão)
     const beta = event.beta || 0;
     const gamma = event.gamma || 0;
     camera.rotation.x = beta * (Math.PI / 180);
@@ -241,14 +268,22 @@ function requestPermission() {
 }
 
 if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    document.getElementById('permission-btn').style.display = 'block';
-    document.getElementById('permission-btn').addEventListener('click', requestPermission);
+    document.getElementById("permission-btn").style.display = "block";
+    document.getElementById("permission-btn").addEventListener("click", requestPermission);
 } else {
     requestPermission();
 }
 
+// Botão Recalibrar Bússola (apenas recarrega os listeners)
+document.getElementById("recalibrate-compass-btn").addEventListener("click", () => {
+    window.removeEventListener('deviceorientation', handleOrientation, true);
+    window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+    requestPermission();
+    document.getElementById("ui").innerHTML += "<br>🔄 Bússola reiniciada.";
+});
+
 // ======================
-// 7. MATEMÁTICA GEOGRÁFICA
+// 6. MATEMÁTICA
 // ======================
 function getBearing(lat1, lon1, lat2, lon2) {
     const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -269,12 +304,11 @@ function getDistance(lat1, lon1, lat2, lon2) {
 }
 
 // ======================
-// 8. LOOP
+// 7. LOOP
 // ======================
 function animate() {
     requestAnimationFrame(animate);
-    // Animação sutil no anel para confirmar que está renderizando
-    ring.rotation.z += 0.03;
+    ring.rotation.z += 0.02; // Animação para saber que não travou
     renderer.render(scene, camera);
 }
 animate();
