@@ -2,183 +2,143 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Kart AR Debug</title>
-
-<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<title>AR KART CORE</title>
 
 <style>
-html,body{
+body {
     margin:0;
     overflow:hidden;
-    font-family:Arial;
 }
 
-#hud{
+#ui {
     position:absolute;
     top:0;
     left:0;
-    width:100%;
-    z-index:9999;
+    z-index:10;
+    background:rgba(0,0,0,0.7);
     color:white;
-    background:rgba(0,0,0,0.75);
     padding:10px;
-    box-sizing:border-box;
+    font-family:Arial;
     font-size:14px;
 }
-
-button{
-    margin:3px;
-    padding:10px;
-    font-size:16px;
-}
 </style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
+
 <body>
 
-<div id="hud">
-
-<div id="info">
-Aguardando GPS...
+<div id="ui">
+GPS: carregando...<br>
+Distância: --
 </div>
 
-<br>
-
-<button onclick="toggleSphere()">Mostrar/Ocultar</button>
-<button onclick="increaseScale()">+</button>
-<button onclick="decreaseScale()">-</button>
-
-</div>
-
-<a-scene>
-
-    <a-camera id="cam" position="0 1.6 0"></a-camera>
-
-    <a-sphere
-        id="kartSphere"
-        position="0 1.5 -5"
-        radius="0.5"
-        color="red">
-    </a-sphere>
-
-</a-scene>
+<video id="video" autoplay playsinline style="display:none;"></video>
 
 <script>
 
-// Coordenada fornecida por você
+// ======================
+// CONFIG KART
+// ======================
 const targetLat = -22.4420306;
 const targetLon = -46.9526000;
 
-let sphere =
-document.getElementById("kartSphere");
+// ======================
+// THREE SETUP
+// ======================
+const scene = new THREE.Scene();
 
-let sphereScale = 1;
+const camera = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth/window.innerHeight,
+    0.1,
+    1000
+);
 
-function toRad(v){
-    return v * Math.PI / 180;
-}
+const renderer = new THREE.WebGLRenderer({alpha:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-function distanceMeters(lat1, lon1, lat2, lon2)
-{
+// esfera (kart)
+const geometry = new THREE.SphereGeometry(0.5, 16, 16);
+const material = new THREE.MeshBasicMaterial({color:0x0000ff});
+const sphere = new THREE.Mesh(geometry, material);
+
+sphere.position.z = -5;
+scene.add(sphere);
+
+// luz (opcional)
+const light = new THREE.AmbientLight(0xffffff);
+scene.add(light);
+
+// ======================
+// CAMERA REAL
+// ======================
+navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } })
+.then(stream => {
+    document.getElementById("video").srcObject = stream;
+});
+
+// fundo camera
+const video = document.getElementById("video");
+
+// ======================
+// GPS
+// ======================
+let userLat = 0;
+let userLon = 0;
+
+navigator.geolocation.watchPosition(pos => {
+
+    userLat = pos.coords.latitude;
+    userLon = pos.coords.longitude;
+
+    const dist = getDistance(
+        userLat, userLon,
+        targetLat, targetLon
+    );
+
+    document.getElementById("ui").innerHTML =
+        "GPS OK<br>" +
+        "Lat: " + userLat.toFixed(6) + "<br>" +
+        "Lon: " + userLon.toFixed(6) + "<br>" +
+        "Distância: " + dist.toFixed(1) + " m";
+
+}, err => {
+    document.getElementById("ui").innerHTML =
+        "ERRO GPS: " + err.message;
+});
+
+// ======================
+// DISTÂNCIA REAL
+// ======================
+function getDistance(lat1, lon1, lat2, lon2) {
+
     const R = 6371000;
 
-    const dLat = toRad(lat2-lat1);
-    const dLon = toRad(lon2-lon1);
+    const dLat = (lat2-lat1) * Math.PI/180;
+    const dLon = (lon2-lon1) * Math.PI/180;
 
     const a =
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLon/2) *
-        Math.sin(dLon/2);
+        Math.sin(dLat/2)**2 +
+        Math.cos(lat1*Math.PI/180) *
+        Math.cos(lat2*Math.PI/180) *
+        Math.sin(dLon/2)**2;
 
-    const c = 2 * Math.atan2(
-        Math.sqrt(a),
-        Math.sqrt(1-a)
-    );
-
-    return R * c;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-function toggleSphere()
-{
-    let vis =
-        sphere.getAttribute("visible");
+// ======================
+// LOOP
+// ======================
+function animate() {
 
-    sphere.setAttribute(
-        "visible",
-        !vis
-    );
+    requestAnimationFrame(animate);
+
+    renderer.render(scene, camera);
 }
 
-function increaseScale()
-{
-    sphereScale += 0.2;
-
-    sphere.setAttribute(
-        "scale",
-        `${sphereScale} ${sphereScale} ${sphereScale}`
-    );
-}
-
-function decreaseScale()
-{
-    sphereScale -= 0.2;
-
-    if(sphereScale < 0.2)
-        sphereScale = 0.2;
-
-    sphere.setAttribute(
-        "scale",
-        `${sphereScale} ${sphereScale} ${sphereScale}`
-    );
-}
-
-navigator.geolocation.watchPosition(
-    pos =>
-    {
-        const lat =
-            pos.coords.latitude;
-
-        const lon =
-            pos.coords.longitude;
-
-        const accuracy =
-            pos.coords.accuracy;
-
-        const dist =
-            distanceMeters(
-                lat,
-                lon,
-                targetLat,
-                targetLon
-            );
-
-        document.getElementById("info")
-        .innerHTML =
-
-        "<b>SUA POSIÇÃO</b><br>" +
-        "Lat: " + lat.toFixed(6) + "<br>" +
-        "Lon: " + lon.toFixed(6) + "<br>" +
-        "Precisão: " + accuracy.toFixed(1) + "m<br><br>" +
-
-        "<b>ESFERA</b><br>" +
-        "Lat: " + targetLat + "<br>" +
-        "Lon: " + targetLon + "<br><br>" +
-
-        "<b>DISTÂNCIA</b><br>" +
-        dist.toFixed(1) + " metros";
-    },
-    err =>
-    {
-        document.getElementById("info")
-        .innerHTML =
-        "Erro GPS: " + err.message;
-    },
-    {
-        enableHighAccuracy:true,
-        maximumAge:0
-    }
-);
+animate();
 
 </script>
 
